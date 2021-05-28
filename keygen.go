@@ -1,4 +1,4 @@
-package vssl
+package sconn
 
 import (
 	"bytes"
