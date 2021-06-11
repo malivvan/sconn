@@ -6,8 +6,77 @@ import (
 	"crypto/x509"
 	"errors"
 	"net"
+	"sync"
+	"sync/atomic"
 	"time"
 )
+
+type Dialer struct {
+	network string
+	address string
+	timeout time.Duration
+	store   *CertStore
+
+	wg     sync.WaitGroup
+	closed atomic.Value
+	conn   net.Conn
+}
+
+func NewDialer(network string, address string, timeout time.Duration, store *CertStore) *Dialer {
+	d := &Dialer{
+		network: network,
+		address: address,
+		timeout: timeout,
+		store:   store,
+	}
+	d.closed.Store(true)
+	return d
+}
+
+func (d *Dialer) Dial(handler func(conn *tls.Conn, cert *x509.Certificate, err error)) error {
+	if !d.closed.Load().(bool) {
+		return errors.New("dialer was already started")
+	}
+	d.closed.Store(false)
+
+	d.wg.Add(1)
+	go func() {
+		defer func() {
+			d.wg.Done()
+		}()
+		for !d.closed.Load().(bool) {
+
+			// dial according to configuration
+			conn, cert, err := Dial(d.network, d.address, d.timeout, d.store)
+			if err != nil {
+				handler(nil, nil, err)
+				time.Sleep(5* time.Second)
+				continue
+			}
+
+			// execute handler and cleanup after
+			d.conn = conn
+			handler(conn, cert, err)
+			conn.Close()
+		}
+	}()
+
+	return nil
+}
+
+func (d *Dialer) IsClosed() bool {
+	return d.closed.Load().(bool)
+}
+
+func (d *Dialer) Close() error {
+	d.closed.Store(true)
+	var err error
+	if d.conn != nil {
+		err = d.conn.Close()
+	}
+	d.wg.Wait()
+	return err
+}
 
 func Dial(network string, address string, timeout time.Duration, store *CertStore) (*tls.Conn, *x509.Certificate, error) {
 
@@ -44,3 +113,18 @@ func Dial(network string, address string, timeout time.Duration, store *CertStor
 
 	return tlsConn, state.PeerCertificates[0], nil
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
